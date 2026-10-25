@@ -519,7 +519,8 @@ class ABBWelcomeCoordinator(DataUpdateCoordinator[ABBWelcomeData]):
                 self._data.latest_screenshot = newest_screenshot
                 self._data.latest_screenshot_event_id = newest_screenshot_id
 
-            for ie in polled_events:
+            # Portal events are newest-first; older frames must not replace newer ones.
+            for ie in reversed(polled_events):
                 if ie.image_data and ie.station_id:
                     self._data.latest_screenshots_by_station[ie.station_id] = ie
 

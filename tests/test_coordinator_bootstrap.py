@@ -6,6 +6,7 @@ import asyncio
 import base64
 import http.client
 import importlib.util
+import json
 import socket
 import sys
 import types
@@ -328,6 +329,50 @@ def test_repolling_latest_page_advances_screenshot_and_deduplicates() -> None:
         "old-screenshot",
     ]
     assert all("newer_than_id" not in params for _url, params in session.calls)
+
+
+def test_station_snapshots_keep_the_newest_image_from_each_station() -> None:
+    def ring(event_id: str, station_id: str, timestamp: str):
+        return _event(
+            event_id,
+            timestamp=timestamp,
+            payload=base64.b64encode(
+                json.dumps({"local_id": f"sip:{station_id}@example.invalid"}).encode()
+            ).decode(),
+        )
+
+    def screenshot(event_id: str, ring_id: str, timestamp: str):
+        event = _screenshot(event_id, timestamp)
+        event["belongsTo"] = ring_id
+        event["payload"] = base64.b64encode(b"\xff\xd8" + event_id.encode()).decode()
+        return event
+
+    old_front = screenshot("old-front", "ring-old-front", "2026-01-01T12:00:01Z")
+    new_front = screenshot("new-front", "ring-new-front", "2026-01-02T12:00:01Z")
+    back = screenshot("back", "ring-back", "2026-01-02T11:00:01Z")
+    old_page = [old_front, ring("ring-old-front", "01", "2026-01-01T12:00:00Z")]
+    latest_page = [
+        new_front,
+        ring("ring-new-front", "01", "2026-01-02T12:00:00Z"),
+        back,
+        ring("ring-back", "02", "2026-01-02T11:00:00Z"),
+        *old_page,
+    ]
+    instance = _coordinator(_Session([old_page, latest_page, latest_page]))
+    assert instance.poll_events().latest_screenshots_by_station["01"].event_id == (
+        "old-front"
+    )
+
+    for _ in range(2):
+        data = instance.poll_events()
+        assert data.latest_screenshot_event_id == "new-front"
+        assert data.latest_screenshot == b"\xff\xd8new-front"
+        assert data.latest_screenshots_by_station["01"].event_id == "new-front"
+        assert data.latest_screenshots_by_station["01"].image_data == (
+            data.latest_screenshot
+        )
+        assert data.latest_screenshots_by_station["02"].event_id == "back"
+        assert data.latest_screenshots_by_station["02"].image_data == b"\xff\xd8back"
 
 
 def test_ring_poll_refreshes_until_a_new_screenshot_arrives(monkeypatch) -> None:
